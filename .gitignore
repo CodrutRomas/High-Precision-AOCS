@@ -83,3 +83,6 @@ test_*
 
 # Documentation build
 docs/_build/
+
+# Documentation files
+*.md
