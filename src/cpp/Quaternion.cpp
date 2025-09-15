@@ -51,4 +51,12 @@ Vector3 Quaternion::rotate(const Vector3& v) const {
 	return Vector3(result.x, result.y, result.z);
 }	
 
+//Quaternion addition for RK4 integration
+Quaternion Quaternion::operator+(const Quaternion& other) const {
+	return Quaternion(w + other.w, x + other.x, y + other.y, z + other.z);
+}
 
+//Scalar multiplication for RK4 integration
+Quaternion Quaternion::operator*(double scalar) const {
+	return Quaternion(w * scalar, x * scalar, y * scalar, z * scalar);
+}

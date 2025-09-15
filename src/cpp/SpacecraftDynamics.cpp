@@ -1,6 +1,7 @@
 ﻿#include "SpacecraftDynamics.h"
 #include <cmath>
 #include <iostream>
+#define M_PI 3.14159265358979323846
 
 SpacecraftDynamics::SpacecraftDynamics(double mass, Vector3 dims, Vector3 com_off)
 	: mass(mass), dimensions(dims), com_offset(com_off) {
@@ -41,13 +42,17 @@ SpacecraftDynamics::SpacecraftDynamics(double mass, Vector3 dims, Vector3 com_of
 	orbital_period = 2 * M_PI * std::sqrt((semi_major_axis * semi_major_axis * semi_major_axis) / GM);
 
 	// Initialize mission parameters
-	mission_time = 0.0;                                
+	mission_time = 0.0;                
 
 	// Initialize spacecraft configuration parameters
 	drag_coefficient = 2.2;                           //Typical for tumbling CubeSat
 	solar_reflectance = 0.3;                          //Typical solar panel/aluminum mix
-	residual_magnetic_dipole = Vector3(0.001, 0.001, 0.001); //Small residual moment (A⋅m²)
-}
+	residual_magnetic_dipole = Vector3(0.001, 0.001, 0.001); //Small residual moment (A⋅m^2)
+
+	//Initialize PD control gains 
+	Kp_x = Kp_y = Kp_z = 0.0001; //Proportional gain [N⋅m/rad]
+	Kd_x = Kd_y = Kd_z = 0.001;  //Derivative gain [N⋅m/(rad/s)]
+} 
 
 void SpacecraftDynamics::computeCubeSatInertial(double mass, const Vector3& dimensions, double& Ixx, double& Iyy, double& Izz) {
 	//Extract dimensions for clarity
@@ -64,9 +69,332 @@ void SpacecraftDynamics::computeCubeSatInertial(double mass, const Vector3& dime
 	//Izz rotation about z axis, depends on X and Y
 	Izz = (mass / 12.0) * (length * length + width * width);
 
-	std::cout << "Computed moments of inertia (kg⋅m²):\n";
+	std::cout << "Computed moments of inertia (kg⋅m^2):\n";
 	std::cout << "  Ixx = " << Ixx << std::endl;
 	std::cout << "  Iyy = " << Iyy << std::endl;
 	std::cout << "  Izz = " << Izz << std::endl;
+}
+
+void SpacecraftDynamics::setState(const Vector3& pos_eci, const Vector3& vel_eci, const Vector3& ang_vel_body, const Quaternion& att_eci_to_body) {
+	position_eci = pos_eci;
+	velocity_eci = vel_eci;
+	angular_velocity = ang_vel_body;
+	attitude = att_eci_to_body.normalized(); //To always ensure unit quaternion
+
+	std::cout << "Spacecraft state updated:" << std::endl;
+	std::cout << "  Position ECI (km): (" << position_eci.getX() / 1000.0 << ", "
+		<< position_eci.getY() / 1000.0 << ", " << position_eci.getZ() / 1000.0 << ")" << std::endl;
+	std::cout << "  Angular velocity (deg/s): (" << angular_velocity.getX() * 180.0 / 3.14159 << ", "
+		<< angular_velocity.getY() * 180.0 / 3.14159 << ", " << angular_velocity.getZ() * 180.0 / 3.14159 << ")" << std::endl;
+}
+
+
+
+Vector3 SpacecraftDynamics::computeGravityGradientTorque() const {
+	//Earths gravitational parameter
+	const double GM = 3.986004418e14; //(m^3/s^2)
+	//Position vector magnitute
+	double r_mag = position_eci.magnitude();
+	Vector3 r_unit = position_eci.normalized();
+	//Convert position to body frame
+	Vector3 r_body = attitude.rotate(r_unit);
+	Vector3 I_r_body(Ixx * r_body.getX(), Iyy * r_body.getY(), Izz * r_body.getZ());
+	//Torque: T = (3*GM/r^3) * (r_body × (I * r_body))
+	Vector3 torque_body = r_body.cross(I_r_body);
+	//Scale bu gravity gradient factor
+	double gg_factor = 3.0 * GM / (r_mag * r_mag * r_mag);
+	Vector3 gravity_gradient_torque = torque_body * gg_factor;
+
+	std::cout << "Gravity gradient calculation:" << std::endl;
+	std::cout << "  Altitude: " << (r_mag - 6.371e6) / 1000.0 << " km" << std::endl;
+	std::cout << "  GG torque (nuN⋅m): (" << gravity_gradient_torque.getX() * 1e6 << ", "
+		<< gravity_gradient_torque.getY() * 1e6 << ", " << gravity_gradient_torque.getZ() * 1e6 << ")" << std::endl;
+
+	return gravity_gradient_torque;
+}
+
+Vector3 SpacecraftDynamics::computeMagneticTorque(const Vector3& magnetic_field_eci) const {
+	//Convert magnetic field from ECI to body frame
+	Vector3 B_body = attitude.conjugate().rotate(magnetic_field_eci);
+	//Torque: T = m × B
+	Vector3 magnetic_torque = residual_magnetic_dipole.cross(B_body);
+	std::cout << "Magnetic torque calculation:" << std::endl;
+	std::cout << "  B field ECI (nT): (" << magnetic_field_eci.getX() * 1e9 << ", "
+		<< magnetic_field_eci.getY() * 1e9 << ", " << magnetic_field_eci.getZ() * 1e9 << ")" << std::endl;
+	std::cout << "  Magnetic torque (nuN⋅m): (" << magnetic_torque.getX() * 1e6 << ", "
+		<< magnetic_torque.getY() * 1e6 << ", " << magnetic_torque.getZ() * 1e6 << ")" << std::endl;
+
+	return magnetic_torque;
+}
+
+Vector3 SpacecraftDynamics::computeAtmosphericDragTorque(const Vector3& atmospheric_velocity_eci) const {
+	//Atmospheric density at 400km altitude
+	const double rho_400km = 5.2e-12; //kg/m^3
+	//Atm velocity to body frame
+	Vector3 v_rel_body = attitude.conjugate().rotate(atmospheric_velocity_eci);
+	double v_rel_magnitude = v_rel_body.magnitude();
+	//Drag force: F = 0.5 * rho * v^2 * Cd * A
+	//Refference area front face of CubeSat
+	double reference_area = dimensions.getY() * dimensions.getZ(); //m^2
+	double drag_force_magnitude = 0.5 * rho_400km * v_rel_magnitude * v_rel_magnitude * drag_coefficient * reference_area;
+	//Drag direction
+	Vector3 drag_force_body = v_rel_body.normalized() * (-drag_force_magnitude);
+	//Center of pressure offset
+	Vector3 cp_offset = Vector3(0.1, 0.0, 0.0); //1cm forward in X direction
+	//Torque = (CP - COM) × F_drag
+	Vector3 drag_torque = cp_offset.cross(drag_force_body);
+	std::cout << "Atmospheric drag calculation:" << std::endl;
+	std::cout << "  Relative velocity (m/s): " << v_rel_magnitude << std::endl;
+	std::cout << "  Drag force (nuN): " << drag_force_magnitude * 1e6 << std::endl;
+	std::cout << "  Drag torque (nN⋅m): (" << drag_torque.getX() * 1e9 << ", "
+		<< drag_torque.getY() * 1e9 << ", " << drag_torque.getZ() * 1e9 << ")" << std::endl;
+	return drag_torque;
+}
+
+Vector3 SpacecraftDynamics::computeSolarRadiationTorque(const Vector3& sun_direction_eci) const {
+	//Solar flux constant at 1 AU (W/m^2)
+	const double solar_flux = 1361.0;
+	const double speed_of_light = 3.0e8; //m/s
+	//Convert sun direction to body frame
+	Vector3 sun_dir_body = attitude.conjugate().rotate(sun_direction_eci.normalized());
+	//Calculate exposed area
+	double exposed_area = dimensions.getY() * dimensions.getZ(); //m^2
+	//Solar radiation pressure
+	double radiation_pressure = solar_flux / speed_of_light; //N/m^2
+	//Force magnitude : F = P * A * (1 + reflectance) * cos(theta)
+	double cos_incidence = std::max(0.0, sun_dir_body.getX()); //Illuminated side
+	double srp_force_magnitude = radiation_pressure * exposed_area * (1.0 + solar_reflectance) * cos_incidence;
+	//Force direction (opposite to sun direction)
+	Vector3 srp_force_body = sun_dir_body * srp_force_magnitude;
+	//Center of pressire offset for solar panels
+	Vector3 solar_cp_offset = Vector3(0.005, 0.0, 0.0); //5mm offset
+	//Torque = CP_offset × F_srp
+	Vector3 srp_torque = solar_cp_offset.cross(srp_force_body);
+
+	std::cout << "Solar radiation pressure calculation:" << std::endl;
+	std::cout << "  Sun incidence angle (deg): " << std::acos(cos_incidence) * 180.0 / M_PI << std::endl;
+	std::cout << "  SRP force (nuN): " << srp_force_magnitude * 1e6 << std::endl;
+	std::cout << "  SRP torque (nN⋅m): (" << srp_torque.getX() * 1e9 << ", "
+		<< srp_torque.getY() * 1e9 << ", " << srp_torque.getZ() * 1e9 << ")" << std::endl;
+
+	return srp_torque;
+}
+//Helper function to compute det of 3x3 matrix
+double SpacecraftDynamics::computeDeterminant3x3(const double matrix[3][3]) {
+	return matrix[0][0] * (matrix[1][1] * matrix[2][2] - matrix[1][2] * matrix[2][1])
+		- matrix[0][1] * (matrix[1][0] * matrix[2][2] - matrix[1][2] * matrix[2][0])
+		+ matrix[0][2] * (matrix[1][0] * matrix[2][1] - matrix[1][1] * matrix[2][0]);
+}
+//Helper function to invert 3x3 matrix
+bool SpacecraftDynamics::invert3x3Matrix(const double matrix[3][3], double inverse[3][3], double det) {
+//check for singular matrix
+	if(std::abs(det) < 1e-12) {
+		std::cerr << "Warning: Inertia matrix is nearly singular (det = " << det << ")" << std::endl;
+		return false;
+	}
+
+	double inv_det = 1.0 / det;
+	//det(A) = a11(a22a33 - a23a32) - a12(a21a33 - a23a31) + a13(a21a32 - a22a31)
+	inverse[0][0] = (matrix[1][1] * matrix[2][2] - matrix[1][2] * matrix[2][1]) * inv_det;
+	inverse[0][1] = (matrix[0][2] * matrix[2][1] - matrix[0][1] * matrix[2][2]) * inv_det;
+	inverse[0][2] = (matrix[0][1] * matrix[1][2] - matrix[0][2] * matrix[1][1]) * inv_det;
+
+	inverse[1][0] = (matrix[1][2] * matrix[2][0] - matrix[1][0] * matrix[2][2]) * inv_det;
+	inverse[1][1] = (matrix[0][0] * matrix[2][2] - matrix[0][2] * matrix[2][0]) * inv_det;
+	inverse[1][2] = (matrix[0][2] * matrix[1][0] - matrix[0][0] * matrix[1][2]) * inv_det;
+
+	inverse[2][0] = (matrix[1][0] * matrix[2][1] - matrix[1][1] * matrix[2][0]) * inv_det;
+	inverse[2][1] = (matrix[0][1] * matrix[2][0] - matrix[0][0] * matrix[2][1]) * inv_det;
+	inverse[2][2] = (matrix[0][0] * matrix[1][1] - matrix[0][1] * matrix[1][0]) * inv_det;
+	return true;
+}
+
+Vector3 SpacecraftDynamics::computeAngularAcceleration(const Vector3& applied_torque) const {
+	Vector3 angular_momentum(Ixx * angular_velocity.getX(),
+		Iyy * angular_velocity.getY(),
+		Izz * angular_velocity.getZ());
+	Vector3 gyroscopic_torque = angular_velocity.cross(angular_momentum);
+	//Full 3x3 inertia tensor
+	double I[3][3] = {
+		{Ixx, 0, 0},
+		{0, Iyy, 0},
+		{0, 0, Izz}
+	};
+	//assume cross-products are small for CubeSat
+	double Ixy = 0.0, Ixz = 0.0, Iyz = 0.0;
+	I[0][1] = I[1][0] = Ixy;
+	I[0][2] = I[2][0] = Ixz;
+	I[1][2] = I[2][1] = Iyz;
+	//Total torque
+	Vector3 total_torque = applied_torque;
+	//Net torque = applied torque - gyroscopic torque
+	Vector3 net_torque = total_torque - gyroscopic_torque;
+	//Angular acceleration
+	Vector3 angular_acceleration(net_torque.getX() / Ixx, net_torque.getY() / Iyy, net_torque.getZ() / Izz);
+
+	std::cout << "Angular dynamics calculation:" << std::endl;
+	std::cout << "  Applied torque (nuN⋅m): (" << applied_torque.getX() * 1e6 << ", "
+		<< applied_torque.getY() * 1e6 << ", " << applied_torque.getZ() * 1e6 << ")" << std::endl;
+	std::cout << "  Gyroscopic torque (nuN⋅m): (" << gyroscopic_torque.getX() * 1e6 << ", "
+		<< gyroscopic_torque.getY() * 1e6 << ", " << gyroscopic_torque.getZ() * 1e6 << ")" << std::endl;
+	std::cout << "  Angular acceleration (deg/s^2): (" << angular_acceleration.getX() * 180.0 / M_PI << ", "
+		<< angular_acceleration.getY() * 180.0 / M_PI << ", " << angular_acceleration.getZ() * 180.0 / M_PI << ")" << std::endl;
+
+	return angular_acceleration;
+}
+
+Quaternion SpacecraftDynamics::computeAttitudeDerivative() const {
+	//Angular velocity as quaternion (0, wx, wy, wz)
+	Quaternion omega_quat(0, angular_velocity.getX(), angular_velocity.getY(), angular_velocity.getZ());
+	//Quaternion derivative: 0.5 * q * omega_quat
+	Quaternion q_dot = attitude * omega_quat * 0.5;
+	return q_dot;
+}
+
+void SpacecraftDynamics::integrate(const Vector3& control_torque, double dt) {
+	//Input parameters for environmental torques
+	Vector3 magnetic_field_eci(25000e-9, 5000e-9, -40000e-9); //Earth B-field (T)
+	Vector3 atmospheric_velocity_eci = velocity_eci; //Relative velocity for drag
+	Vector3 sun_direction_eci(1.0, 0.0, 0.0); //Simplified sun direction
+	//Initial state
+	Vector3 omega0 = angular_velocity;
+	Quaternion q0 = attitude;
+	attitude = attitude.normalized();
+	//K1 coef at t
+	Vector3 total_torque_k1 = control_torque + computeGravityGradientTorque() + computeMagneticTorque(magnetic_field_eci) 
+		+ computeAtmosphericDragTorque(atmospheric_velocity_eci) + computeSolarRadiationTorque(sun_direction_eci);
+	Vector3 k1_omega = computeAngularAcceleration(total_torque_k1);
+	Quaternion k1_q = computeAttitudeDerivative();
+	attitude = attitude.normalized();
+	//K2 coef at t + dt/2
+	angular_velocity = omega0 + k1_omega * (dt / 2.0);
+	attitude = (q0 + k1_q * (dt / 2.0)).normalized();
+	Vector3 total_torque_k2 = control_torque + computeGravityGradientTorque() + computeMagneticTorque(magnetic_field_eci) 
+		+ computeAtmosphericDragTorque(atmospheric_velocity_eci) + computeSolarRadiationTorque(sun_direction_eci);
+	Vector3 k2_omega = computeAngularAcceleration(total_torque_k2);
+	Quaternion k2_q = computeAttitudeDerivative();
+	attitude = attitude.normalized();
+	//K3 coef at t + dt/2
+	angular_velocity = omega0 + k2_omega * (dt / 2.0);
+	attitude = (q0 + k2_q * (dt / 2.0)).normalized();
+	Vector3 total_torque_k3 = control_torque + computeGravityGradientTorque() + computeMagneticTorque(magnetic_field_eci) 
+		+ computeAtmosphericDragTorque(atmospheric_velocity_eci) + computeSolarRadiationTorque(sun_direction_eci);
+	Vector3 k3_omega = computeAngularAcceleration(total_torque_k3);
+	Quaternion k3_q = computeAttitudeDerivative();
+	attitude = attitude.normalized();
+	//K4 coef at t + dt
+	angular_velocity = omega0 + k3_omega * dt;
+	attitude = (q0 + k3_q * dt).normalized();
+	Vector3 total_torque_k4 = control_torque + computeGravityGradientTorque() + computeMagneticTorque(magnetic_field_eci) 
+		+ computeAtmosphericDragTorque(atmospheric_velocity_eci) + computeSolarRadiationTorque(sun_direction_eci);
+	Vector3 k4_omega = computeAngularAcceleration(total_torque_k4);
+	Quaternion k4_q = computeAttitudeDerivative();
+	attitude = attitude.normalized();
+	//Final RK4 integration
+	Vector3 omega_final = omega0 + (k1_omega + k2_omega * 2.0 + k3_omega * 2.0 + k4_omega) * (dt / 6.0);
+	Quaternion q_final = q0 + (k1_q + k2_q * 2.0 + k3_q * 2.0 + k4_q) * (dt / 6.0);
+	attitude = attitude.normalized();
+	//Update state with final values
+	angular_velocity = omega_final;
+	attitude = q_final.normalized();
+
+	//Debug output
+	std::cout << "Rk4 model \n";
+	std::cout << "Total environmental torque (nuN⋅m): (" << total_torque_k1.getX() * 1e6 << ", "
+		<< total_torque_k1.getY() * 1e6 << ", " << total_torque_k1.getZ() * 1e6 << ")\n";
+}
+
+void SpacecraftDynamics::setControlGains(double Kp, double Kd) {
+	Kp_x = Kp_y = Kp_z = Kp;
+	Kd_x = Kd_y = Kd_z = Kd;
+	std::cout << "Control gains updated: Kp = " << Kp << ", Kd = " << Kd << std::endl;
+}
+
+Vector3 SpacecraftDynamics::computeAttitudeError(const Quaternion& target_attitude) const {
+	Quaternion q_err = target_attitude * attitude.conjugate();
+
+	//Ensure shortest path
+	if (q_err.getW() < 0) {
+		q_err = q_err * (-1.0);
+	}
+
+	//Extract rotation vector properly: θ * axis
+	double w = q_err.getW();
+	Vector3 v(q_err.getX(), q_err.getY(), q_err.getZ());
+	double v_mag = v.magnitude();
+
+	if (v_mag < 1e-6) {
+		return Vector3(0, 0, 0); //No rotation needed
+	}
+
+	double angle = 2.0 * atan2(v_mag, abs(w));
+	Vector3 axis = v.normalized();
+
+	return axis * angle; //Proper rotation vector
+}
+
+
+Vector3 SpacecraftDynamics::computePDControl(const Quaternion& target_attitude, const Vector3& target_angular_velocity) const {
+	//Proportional term
+	Vector3 attitude_error = computeAttitudeError(target_attitude);
+	//Derivative term
+	Vector3 rate_error = target_angular_velocity - angular_velocity;
+	//PD control law: T = -Kp * attitude_error - Kd * rate_error
+	Vector3 control_torque(-(Kp_x * attitude_error.getX() + Kd_x * rate_error.getX()),
+		-(Kp_y * attitude_error.getY() + Kd_y * rate_error.getY()),
+		-(Kp_z * attitude_error.getZ() + Kd_z * rate_error.getZ()));
+	
+	std::cout << "PD control :\n";
+	std::cout << "  Attitude error (deg): (" << attitude_error.getX() * 180.0 / M_PI << ", "
+		<< attitude_error.getY() * 180.0 / M_PI << ", " << attitude_error.getZ() * 180.0 / M_PI << ")\n";
+	std::cout << "  Rate error (deg/s): (" << rate_error.getX() * 180.0 / M_PI << ", " 
+		<< rate_error.getY() * 180.0 / M_PI << ", " << rate_error.getZ() * 180.0 / M_PI << ")\n";
+	std::cout << "  Control torque (nuN⋅m): (" << control_torque.getX() * 1e6 << ", "
+		<< control_torque.getY() * 1e6 << ", " << control_torque.getZ() * 1e6 << ")\n";
+
+	return control_torque;
+}
+
+Vector3 SpacecraftDynamics::computeDetumblingControl() const {
+	//Simple B-dot control: oppose any rotation
+	Vector3 detumbling_torque = angular_velocity * (-0.005); //Damping gain
+
+	std::cout << "Detumbling control (uN*m): ("
+		<< detumbling_torque.getX() * 1e6 << ", "
+		<< detumbling_torque.getY() * 1e6 << ", "
+		<< detumbling_torque.getZ() * 1e6 << ")" << std::endl;
+
+	return detumbling_torque;
+}
+
+Quaternion SpacecraftDynamics::computeNadirPointingTarget() const {
+	// Nadir direction: from satellite toward Earth center
+	Vector3 nadir_direction = position_eci.normalized() * (-1.0);
+
+	// Target: align satellite Z-axis with nadir direction
+	Vector3 target_z_body = nadir_direction;
+	Vector3 current_z_eci(0, 0, 1); // Z-axis in ECI frame
+
+	// Calculate rotation from current Z to target nadir
+	Vector3 rotation_axis = current_z_eci.cross(target_z_body);
+	double rotation_angle = acos(current_z_eci.dot(target_z_body));
+
+	// Handle parallel/antiparallel case
+	if (rotation_axis.magnitude() < 1e-6) {
+		if (rotation_angle < M_PI / 2) {
+			return Quaternion(1, 0, 0, 0); // No rotation needed
+		}
+		else {
+			return Quaternion(0, 1, 0, 0); // 180° rotation around X
+		}
+	}
+
+	// Create quaternion from axis-angle
+	rotation_axis = rotation_axis.normalized();
+	double half_angle = rotation_angle / 2.0;
+	return Quaternion(cos(half_angle),
+		rotation_axis.getX() * sin(half_angle),
+		rotation_axis.getY() * sin(half_angle),
+		rotation_axis.getZ() * sin(half_angle));
 }
 

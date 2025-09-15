@@ -19,6 +19,8 @@ public:
 	double getZ() const { return z; }
 	//Quaternion operations
 	Quaternion operator*(const Quaternion& other) const; //Hamilton product
+	Quaternion operator+(const Quaternion& other) const; //Quaternion addition
+	Quaternion operator*(double scalar) const; //Scalar multiplication
 	Quaternion conjugate() const; //(w, -x, -y, -z)
 	double norm() const; // |q| = sqrt(w^2 + x^2 + y^2 + z^2)
 	Quaternion normalized() const; // Unit quaternion
