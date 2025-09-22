@@ -26,9 +26,24 @@ private:
 	double solar_reflectance;
 	Vector3 residual_magnetic_dipole;
 
-	// Matrix utilities for full inertia tensor
+	//ACTUATORS 
+	//Reaction Wheels (3-axis) 
+	Vector3 wheel_angular_velocity; //Stored momentum in wheel
+	double wheel_inertia; //Individual wheel inertia
+	double max_wheel_speed;
+	double max_wheel_torque;
+	bool wheels_enabled;
+
+	//Magnetorquers (3-axis)
+	Vector3 commanded_magnetic_dipole;
+	double max_magnetic_dipole;
+	bool magnetorquer_enabled;
+
+	//Matrix utilities for full inertia tensor
 	static double computeDeterminant3x3(const double matrix[3][3]);
 	static bool invert3x3Matrix(const double matrix[3][3], double inverse[3][3], double det);
+	//Quaternion conversion utilities
+	static Quaternion quaternionFromDCM(const double dcm[3][3]);
 
 
 public:
@@ -41,6 +56,22 @@ public:
 		const Vector3& target_angular_velocity = Vector3 (0,0,0)) const;
 	Vector3 computeDetumblingControl() const;
 	Quaternion computeNadirPointingTarget() const;
+	Quaternion computeStabilizationTarget() const;
+
+	//Actuators control functions
+	//Reaction wheel control
+	Vector3 computeReactionWheelControl(const Quaternion& target_attitude, const Vector3& direct_torque = Vector3(0, 0, 0));
+	void updateWheelMomentum(const Vector3& commanded_torque, double dt);
+	Vector3 getWheelVelocity() const { return wheel_angular_velocity; }
+	void setWheelVelocity(const Vector3& vel) { wheel_angular_velocity = vel; }
+	bool areWheelsSaturated() const;
+	void desaturateWheels(const Vector3& magnetic_field_eci, double dt);
+	//Magnetorque controls
+	Vector3 computeMagnetorqueControl(const Vector3& desired_torque, const Vector3& magnetic_field_eci);
+	Vector3 computeMagnetorqueDetumbling(const Vector3& magnetic_field_eci);
+	//Hybrid actuator control
+	Vector3 computeHybridControl(const Quaternion& target_attitude, const Vector3& magnetic_field_eci);
+	void initializeActuators();
 	//Utility Functions
 	void setControlGains(double Kp, double Kd);
 	//Constructor with 6U CubeSat defaults
