@@ -1,4 +1,4 @@
-***High-Precision AOCS Simulator***
+****High-Precision AOCS Simulator****
 
 A real-time Attitude and Orbit Control System (AOCS) simulator for 6U CubeSats with 3D visualization and mission management capabilities.
 
