@@ -1,0 +1,2 @@
+{"name":"Custom","wx":0.12,"wy":-0.05,"wz":0.09,"altitude_km":400,"incl_deg":98,"kp":1.27353,"kd":2.54705,"max_dipole":2.99,"max_wheel_torque":0.1,"max_wheel_rpm":6000,"duration_s":3600,"auto_transition":1,"auto_time_s":5.70131e-315,"next_mode":4}
+{"name":"Custom","wx":0.05,"wy":-0.03,"wz":0.02,"altitude_km":700,"incl_deg":98,"kp":1.27353,"kd":2.54705,"max_dipole":2.5,"max_wheel_torque":0.01,"max_wheel_rpm":6000,"duration_s":3600,"auto_transition":0,"auto_time_s":0,"next_mode":0}

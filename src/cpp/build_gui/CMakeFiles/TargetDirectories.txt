@@ -1,0 +1,4 @@
+D:/Proiecte-C++/High-precision-AOCS/src/cpp/build_gui/CMakeFiles/aocs_realtime_simulator_integrated.dir
+D:/Proiecte-C++/High-precision-AOCS/src/cpp/build_gui/CMakeFiles/INSTALL.dir
+D:/Proiecte-C++/High-precision-AOCS/src/cpp/build_gui/CMakeFiles/ALL_BUILD.dir
+D:/Proiecte-C++/High-precision-AOCS/src/cpp/build_gui/CMakeFiles/ZERO_CHECK.dir

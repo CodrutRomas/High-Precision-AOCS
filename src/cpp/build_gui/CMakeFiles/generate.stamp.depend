@@ -1,0 +1,24 @@
+# CMake generation dependency list for this directory.
+D:/Proiecte-C++/High-precision-AOCS/src/cpp/CMakeLists.txt
+D:/Proiecte-C++/High-precision-AOCS/src/cpp/build_gui/CMakeFiles/3.27.0/CMakeCXXCompiler.cmake
+D:/Proiecte-C++/High-precision-AOCS/src/cpp/build_gui/CMakeFiles/3.27.0/CMakeRCCompiler.cmake
+D:/Proiecte-C++/High-precision-AOCS/src/cpp/build_gui/CMakeFiles/3.27.0/CMakeSystem.cmake
+D:/Proiecte-C++/High-precision-AOCS/src/cpp/dependencies/cmake/share/cmake-3.27/Modules/CMakeCXXInformation.cmake
+D:/Proiecte-C++/High-precision-AOCS/src/cpp/dependencies/cmake/share/cmake-3.27/Modules/CMakeCommonLanguageInclude.cmake
+D:/Proiecte-C++/High-precision-AOCS/src/cpp/dependencies/cmake/share/cmake-3.27/Modules/CMakeGenericSystem.cmake
+D:/Proiecte-C++/High-precision-AOCS/src/cpp/dependencies/cmake/share/cmake-3.27/Modules/CMakeInitializeConfigs.cmake
+D:/Proiecte-C++/High-precision-AOCS/src/cpp/dependencies/cmake/share/cmake-3.27/Modules/CMakeLanguageInformation.cmake
+D:/Proiecte-C++/High-precision-AOCS/src/cpp/dependencies/cmake/share/cmake-3.27/Modules/CMakeRCInformation.cmake
+D:/Proiecte-C++/High-precision-AOCS/src/cpp/dependencies/cmake/share/cmake-3.27/Modules/CMakeSystemSpecificInformation.cmake
+D:/Proiecte-C++/High-precision-AOCS/src/cpp/dependencies/cmake/share/cmake-3.27/Modules/CMakeSystemSpecificInitialize.cmake
+D:/Proiecte-C++/High-precision-AOCS/src/cpp/dependencies/cmake/share/cmake-3.27/Modules/Compiler/CMakeCommonCompilerMacros.cmake
+D:/Proiecte-C++/High-precision-AOCS/src/cpp/dependencies/cmake/share/cmake-3.27/Modules/Compiler/MSVC-CXX.cmake
+D:/Proiecte-C++/High-precision-AOCS/src/cpp/dependencies/cmake/share/cmake-3.27/Modules/Compiler/MSVC.cmake
+D:/Proiecte-C++/High-precision-AOCS/src/cpp/dependencies/cmake/share/cmake-3.27/Modules/FindOpenGL.cmake
+D:/Proiecte-C++/High-precision-AOCS/src/cpp/dependencies/cmake/share/cmake-3.27/Modules/FindPackageHandleStandardArgs.cmake
+D:/Proiecte-C++/High-precision-AOCS/src/cpp/dependencies/cmake/share/cmake-3.27/Modules/FindPackageMessage.cmake
+D:/Proiecte-C++/High-precision-AOCS/src/cpp/dependencies/cmake/share/cmake-3.27/Modules/Platform/Windows-Initialize.cmake
+D:/Proiecte-C++/High-precision-AOCS/src/cpp/dependencies/cmake/share/cmake-3.27/Modules/Platform/Windows-MSVC-CXX.cmake
+D:/Proiecte-C++/High-precision-AOCS/src/cpp/dependencies/cmake/share/cmake-3.27/Modules/Platform/Windows-MSVC.cmake
+D:/Proiecte-C++/High-precision-AOCS/src/cpp/dependencies/cmake/share/cmake-3.27/Modules/Platform/Windows.cmake
+D:/Proiecte-C++/High-precision-AOCS/src/cpp/dependencies/cmake/share/cmake-3.27/Modules/Platform/WindowsPaths.cmake
