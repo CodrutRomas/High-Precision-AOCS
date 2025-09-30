@@ -1,0 +1,31 @@
+# Make GitHub linguist show repo as C++ only
+# 1) Default: exclude files from language stats
+* linguist-detectable=false
+
+# 2) Allow and force C++ for common C/C++ extensions
+*.cpp linguist-detectable=true linguist-language=C++
+*.cxx linguist-detectable=true linguist-language=C++
+*.cc  linguist-detectable=true linguist-language=C++
+*.hpp linguist-detectable=true linguist-language=C++
+*.hxx linguist-detectable=true linguist-language=C++
+*.h   linguist-detectable=true linguist-language=C++
+*.inl linguist-detectable=true linguist-language=C++
+*.ipp linguist-detectable=true linguist-language=C++
+
+# 3) Treat vendored and generated content as ignored for stats
+src/cpp/dependencies/** linguist-vendored
+build/**               linguist-generated
+out/**                 linguist-generated
+bin/**                 linguist-generated
+
+# 4) Common non-C++ files excluded from stats
+*.cmake linguist-detectable=false
+CMakeLists.txt linguist-detectable=false
+*.md     linguist-documentation
+docs/**  linguist-documentation
+*.bat    linguist-detectable=false
+*.ps1    linguist-detectable=false
+*.json   linguist-detectable=false
+*.yml    linguist-detectable=false
+*.yaml   linguist-detectable=false
+*.txt    linguist-detectable=false
