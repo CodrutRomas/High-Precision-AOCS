@@ -1,0 +1,5 @@
+# Keep CMake docs and manpages out of the repo
+/doc/
+/man/
+/share/**/Help/
+/share/bash-completion/

@@ -1,0 +1,105 @@
+AOCS PERFORMANCE ANALYSIS REPORT
+==================================================
+
+Generated: 2025-09-24 19:21:39
+Data file: ../cpp/anti_alignment_aocs_mission.csv
+
+
+PHASES ANALYSIS:
+------------------------------
+MAG_DETUMBLE:
+  duration_min: 59.8367
+  data_points: 683
+  avg_omega_degps: 3.9262
+  final_omega_degps: 1.7087
+  omega_reduction: 10.2913
+  avg_nadir_error_deg: 50.8312
+  final_nadir_error_deg: 21.4617
+  min_nadir_error_deg: 18.9080
+  avg_wheel_speed_RPM: 1077.4529
+  max_wheel_speed_RPM: 8660.2743
+HYBRID:
+  duration_min: 10.0000
+  data_points: 37
+  avg_omega_degps: 1.4971
+  final_omega_degps: 1.4996
+  omega_reduction: -0.0163
+  avg_nadir_error_deg: 56.3220
+  final_nadir_error_deg: 32.8717
+  min_nadir_error_deg: 30.9008
+  avg_wheel_speed_RPM: 6696.7394
+  max_wheel_speed_RPM: 7831.6485
+
+CONTROL ANALYSIS:
+------------------------------
+omega:
+  initial_omega_degps: 12.0000
+  final_omega_degps: 1.7087
+  min_omega_degps: 1.4833
+  max_omega_degps: 12.0000
+  avg_omega_degps: 3.8014
+  omega_std: 2.2200
+  total_reduction_degps: 10.2913
+  reduction_percentage: 85.7607
+nadir:
+  final_nadir_error_deg: 21.4617
+  min_nadir_error_deg: 18.9080
+  max_nadir_error_deg: 89.8502
+  avg_nadir_error_deg: 51.1133
+  nadir_error_std: 18.3662
+  time_below_1deg: 0.0000
+  time_below_5deg: 0.0000
+wheel_effort:
+  avg_wheel_torque_uNm: 76.7026
+  max_wheel_torque_uNm: 2097.7111
+  wheel_torque_std: 248.1942
+  total_wheel_impulse: 274194.0310
+mag_effort:
+  avg_mag_torque_uNm: 31.2197
+  max_mag_torque_uNm: 76.8184
+  mag_torque_std: 11.9158
+  total_mag_impulse: 112138.1868
+
+ACTUATORS ANALYSIS:
+------------------------------
+wheels:
+  x_axis:
+    max_speed_RPM: 5000.0117
+    avg_abs_speed_RPM: 738.9316
+    final_speed_RPM: 800.0735
+    speed_range_RPM: 8189.9431
+    saturation_time_percent: 12.7778
+  y_axis:
+    max_speed_RPM: 5000.0117
+    avg_abs_speed_RPM: 756.4257
+    final_speed_RPM: 5000.0117
+    speed_range_RPM: 10000.0234
+    saturation_time_percent: 13.8889
+  z_axis:
+    max_speed_RPM: 5000.0117
+    avg_abs_speed_RPM: 709.3347
+    final_speed_RPM: -4999.6989
+    speed_range_RPM: 10000.0234
+    saturation_time_percent: 11.9444
+  combined:
+    max_total_momentum_RPM: 8660.2743
+    avg_total_momentum_RPM: 1366.2218
+    final_total_momentum_RPM: 7115.9837
+    momentum_buildup_RPM: 7115.9837
+anti_align:
+  total_activations: 6
+  total_active_time_min: 0.6018
+  active_time_percentage: 50.1389
+  avg_activation_duration_min: 0
+
+CONVERGENCE ANALYSIS:
+------------------------------
+omega:
+  settling_time_min: 47.5017
+  time_constant_min: 6.8847
+  final_value_degps: 1.7087
+  convergence_rate_degps_per_min: 0.1720
+nadir:
+  time_to_1deg_min: None
+  final_error_deg: 21.4617
+  min_error_achieved_deg: 18.9080
