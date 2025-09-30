@@ -3,6 +3,7 @@
 A real-time Attitude and Orbit Control System (AOCS) simulator for 6U CubeSats with 3D visualization and mission management capabilities.
 
 **Overview**
+
 This simulator provides a complete AOCS testing environment featuring realistic spacecraft dynamics, environmental modeling, and multiple control modes. The system simulates a 6U CubeSat with reaction wheels, magnetorquers, and various sensor systems operating in Low Earth Orbit.
 
 ![Untitleddesign4-ezgif com-cut](https://github.com/user-attachments/assets/92e4b8c3-8653-4cf1-b813-b0cc0c8090cb)
