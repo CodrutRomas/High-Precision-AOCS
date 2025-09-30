@@ -47,21 +47,39 @@ SpacecraftDynamics::SpacecraftDynamics(double mass, Vector3 dims, Vector3 com_of
 	// Initialize spacecraft configuration parameters
 	drag_coefficient = 2.2;                           //Typical for tumbling CubeSat
 	solar_reflectance = 0.3;                          //Typical solar panel/aluminum mix
-	residual_magnetic_dipole = Vector3(0.001, 0.001, 0.001); //Small residual moment (A⋅m^2)
+	residual_magnetic_dipole = Vector3(0.00001, 0.00001, 0.00001); //Small residual moment (A⋅m^2) m = I × A [A⋅m²]
 
-	//Initialize PD control gains - Conservative values to prevent massive torques
-	Kp_x = Kp_y = Kp_z = 0.0001; //Proportional gain [N⋅m/rad] - Reduced back to prevent massive torques
-	Kd_x = Kd_y = Kd_z = 0.001;  //Derivative gain [N⋅m/(rad/s)] - Reduced back for stability
+	//Initialize PD control gains - Proper values for effective AOCS
+	Kp_x = Kp_y = Kp_z = 0.005; //Proportional gain [N⋅m/rad] - Increased for control authority
+	Kd_x = Kd_y = Kd_z = 0.015;  //Derivative gain [N⋅m/(rad/s)] - Increased for damping
 
-	//Initialize actuator parameters
+	//Initialize REAL actuator parameters for 6U CubeSat based on industry standards
+	
+	// AAC Clyde Space RW400 Reaction Wheels (4x in pyramidal configuration)
 	wheel_angular_velocity = Vector3(0, 0, 0);
-	wheel_inertia = 2e-5; //I=1/2 * m * r^2
-	max_wheel_speed = 418.9; //w = rpm * pi/30; for 4000rpm we have 418.9 rad/s
-	max_wheel_torque = 5e-4; //t_max = k_t * I_max; for us k_t = 0.01 N*m/A, I_max = 0.05 A
+	last_wheel_reaction_torque = Vector3(0, 0, 0);
+	wheel_inertia = 2.5e-5; //Calculated from RW400 specs: ~250g wheel, r~15mm
+	max_wheel_speed = 523.6; //5000 RPM converted to rad/s (5000 * π/30)
+	max_wheel_torque = 15e-3; //±15 mN⋅m - increased for better control authority
+	double momentum_capacity = 30e-3; //30 mN⋅m⋅s (medium model)
 	wheels_enabled = true;
+	
+	// REALISTIC Magnetorquers (3-axis) - Real CubeSat 6U specs
 	commanded_magnetic_dipole = Vector3(0, 0, 0);
-	max_magnetic_dipole = 2.0; //m = N*I*A where N- nr. of spires, I- max current, A- coil area. for us N = 1000, I_max = 0.1 A for thermic limitation, A is the cubesat area
+	max_magnetic_dipole = 2.5; //2.5 A⋅m² - proper 6U CubeSat capability
 	magnetorquer_enabled = true;
+	
+	// B-dot control initialization
+	previous_magnetic_field_body = Vector3(0, 0, 0);
+	first_magnetic_measurement = true;
+	previous_time = 0.0;
+	
+	// Anti-alignment system initialization
+	wheel_torque_command = Vector3(0, 0, 0);
+	anti_align_start_time = -1.0;  // -1 = off
+	anti_align_duration = 60.0;    // 60 seconds for persistent stagnation breaking
+	anti_align_freq = 1.0;         // 1.0 Hz for more aggressive rotation
+	anti_align_mfraction = 1.0;    // 100% of max dipole for maximum effect
 } 
 
 void SpacecraftDynamics::computeCubeSatInertial(double mass, const Vector3& dimensions, double& Ixx, double& Iyy, double& Izz) {
@@ -79,7 +97,7 @@ void SpacecraftDynamics::computeCubeSatInertial(double mass, const Vector3& dime
 	//Izz rotation about z axis, depends on X and Y
 	Izz = (mass / 12.0) * (length * length + width * width);
 
-	std::cout << "Computed moments of inertia (kg⋅m^2):\n";
+	std::cout << "Computed moments of inertia (kg*m^2):\n";
 	std::cout << "  Ixx = " << Ixx << std::endl;
 	std::cout << "  Iyy = " << Iyy << std::endl;
 	std::cout << "  Izz = " << Izz << std::endl;
@@ -119,7 +137,7 @@ Vector3 SpacecraftDynamics::computeGravityGradientTorque() const {
 	double r_mag = position_eci.magnitude();
 	Vector3 r_unit = position_eci.normalized();
 	//Convert position to body frame
-	Vector3 r_body = attitude.rotate(r_unit);
+	Vector3 r_body = attitude.conjugate().rotate(r_unit);
 	Vector3 I_r_body(Ixx * r_body.getX(), Iyy * r_body.getY(), Izz * r_body.getZ());
 	//Torque: T = (3*GM/r^3) * (r_body × (I * r_body))
 	Vector3 torque_body = r_body.cross(I_r_body);
@@ -129,7 +147,7 @@ Vector3 SpacecraftDynamics::computeGravityGradientTorque() const {
 
 	std::cout << "Gravity gradient calculation:" << std::endl;
 	std::cout << "  Altitude: " << (r_mag - 6.371e6) / 1000.0 << " km" << std::endl;
-	std::cout << "  GG torque (nuN⋅m): (" << gravity_gradient_torque.getX() * 1e6 << ", "
+	std::cout << "  GG torque (nuN*m): (" << gravity_gradient_torque.getX() * 1e6 << ", "
 		<< gravity_gradient_torque.getY() * 1e6 << ", " << gravity_gradient_torque.getZ() * 1e6 << ")" << std::endl;
 
 	return gravity_gradient_torque;
@@ -143,7 +161,7 @@ Vector3 SpacecraftDynamics::computeMagneticTorque(const Vector3& magnetic_field_
 	std::cout << "Magnetic torque calculation:" << std::endl;
 	std::cout << "  B field ECI (nT): (" << magnetic_field_eci.getX() * 1e9 << ", "
 		<< magnetic_field_eci.getY() * 1e9 << ", " << magnetic_field_eci.getZ() * 1e9 << ")" << std::endl;
-	std::cout << "  Magnetic torque (nuN⋅m): (" << magnetic_torque.getX() * 1e6 << ", "
+	std::cout << "  Magnetic torque (nuN*m): (" << magnetic_torque.getX() * 1e6 << ", "
 		<< magnetic_torque.getY() * 1e6 << ", " << magnetic_torque.getZ() * 1e6 << ")" << std::endl;
 
 	return magnetic_torque;
@@ -168,7 +186,7 @@ Vector3 SpacecraftDynamics::computeAtmosphericDragTorque(const Vector3& atmosphe
 	std::cout << "Atmospheric drag calculation:" << std::endl;
 	std::cout << "  Relative velocity (m/s): " << v_rel_magnitude << std::endl;
 	std::cout << "  Drag force (nuN): " << drag_force_magnitude * 1e6 << std::endl;
-	std::cout << "  Drag torque (nN⋅m): (" << drag_torque.getX() * 1e9 << ", "
+	std::cout << "  Drag torque (nN*m): (" << drag_torque.getX() * 1e9 << ", "
 		<< drag_torque.getY() * 1e9 << ", " << drag_torque.getZ() * 1e9 << ")" << std::endl;
 	return drag_torque;
 }
@@ -179,22 +197,51 @@ Vector3 SpacecraftDynamics::computeSolarRadiationTorque(const Vector3& sun_direc
 	const double speed_of_light = 3.0e8; //m/s
 	//Convert sun direction to body frame
 	Vector3 sun_dir_body = attitude.conjugate().rotate(sun_direction_eci.normalized());
-	//Calculate exposed area
-	double exposed_area = dimensions.getY() * dimensions.getZ(); //m^2
+	// Calculate total exposed area considering all 6 faces of CubeSat
+	double area_x = dimensions.getY() * dimensions.getZ(); // Y-Z face
+	double area_y = dimensions.getX() * dimensions.getZ(); // X-Z face  
+	double area_z = dimensions.getX() * dimensions.getY(); // X-Y face
+	
 	//Solar radiation pressure
 	double radiation_pressure = solar_flux / speed_of_light; //N/m^2
-	//Force magnitude : F = P * A * (1 + reflectance) * cos(theta)
-	double cos_incidence = std::max(0.0, sun_dir_body.getX()); //Illuminated side
-	double srp_force_magnitude = radiation_pressure * exposed_area * (1.0 + solar_reflectance) * cos_incidence;
-	//Force direction (opposite to sun direction)
-	Vector3 srp_force_body = sun_dir_body * srp_force_magnitude;
+	
+	// Calculate force on each illuminated face
+	double cos_x_pos = std::max(0.0, sun_dir_body.getX());   // +X face
+	double cos_x_neg = std::max(0.0, -sun_dir_body.getX());  // -X face
+	double cos_y_pos = std::max(0.0, sun_dir_body.getY());   // +Y face
+	double cos_y_neg = std::max(0.0, -sun_dir_body.getY());  // -Y face
+	double cos_z_pos = std::max(0.0, sun_dir_body.getZ());   // +Z face
+	double cos_z_neg = std::max(0.0, -sun_dir_body.getZ());  // -Z face
+	
+	// Total force considering all illuminated faces
+	double total_force = radiation_pressure * (1.0 + solar_reflectance) * (
+		cos_x_pos * area_x + cos_x_neg * area_x +
+		cos_y_pos * area_y + cos_y_neg * area_y +
+		cos_z_pos * area_z + cos_z_neg * area_z
+	);
+	
+	// Net force direction (weighted average of illuminated face normals)
+	Vector3 net_force_direction(
+		(cos_x_pos - cos_x_neg) * area_x,
+		(cos_y_pos - cos_y_neg) * area_y, 
+		(cos_z_pos - cos_z_neg) * area_z
+	);
+	
+	if (net_force_direction.magnitude() > 1e-12) {
+		net_force_direction = net_force_direction.normalized();
+	}
+	
+	// Force magnitude using proper area calculation
+	double srp_force_magnitude = total_force;
+	//Force direction (from proper face illumination calculation)
+	Vector3 srp_force_body = net_force_direction * srp_force_magnitude;
 	//Center of pressire offset for solar panels
 	Vector3 solar_cp_offset = Vector3(0.005, 0.0, 0.0); //5mm offset
 	//Torque = CP_offset × F_srp
 	Vector3 srp_torque = solar_cp_offset.cross(srp_force_body);
 
 	std::cout << "Solar radiation pressure calculation:" << std::endl;
-	std::cout << "  Sun incidence angle (deg): " << std::acos(cos_incidence) * 180.0 / M_PI << std::endl;
+	std::cout << "  Sun direction body: (" << sun_dir_body.getX() << ", " << sun_dir_body.getY() << ", " << sun_dir_body.getZ() << ")" << std::endl;
 	std::cout << "  SRP force (nuN): " << srp_force_magnitude * 1e6 << std::endl;
 	std::cout << "  SRP torque (nN⋅m): (" << srp_torque.getX() * 1e9 << ", "
 		<< srp_torque.getY() * 1e9 << ", " << srp_torque.getZ() * 1e9 << ")" << std::endl;
@@ -294,35 +341,24 @@ bool SpacecraftDynamics::invert3x3Matrix(const double matrix[3][3], double inver
 }
 
 Vector3 SpacecraftDynamics::computeAngularAcceleration(const Vector3& applied_torque) const {
+	// CORRECT RIGID BODY DYNAMICS: α = I^-1 * (T_applied - ω × (I·ω))
+	// Gyroscopic torque MUST be included always for physical accuracy
+	
+	// Angular momentum H = I·ω
 	Vector3 angular_momentum(Ixx * angular_velocity.getX(),
-		Iyy * angular_velocity.getY(),
-		Izz * angular_velocity.getZ());
+			Iyy * angular_velocity.getY(),
+			Izz * angular_velocity.getZ());
+			
+	// Gyroscopic torque: T_gyro = ω × H = ω × (I·ω)
 	Vector3 gyroscopic_torque = angular_velocity.cross(angular_momentum);
-	//Full 3x3 inertia tensor
-	double I[3][3] = {
-		{Ixx, 0, 0},
-		{0, Iyy, 0},
-		{0, 0, Izz}
-	};
-	//assume cross-products are small for CubeSat
-	double Ixy = 0.0, Ixz = 0.0, Iyz = 0.0;
-	I[0][1] = I[1][0] = Ixy;
-	I[0][2] = I[2][0] = Ixz;
-	I[1][2] = I[2][1] = Iyz;
-	//Total torque
-	Vector3 total_torque = applied_torque;
-	//Net torque = applied torque - gyroscopic torque
-	Vector3 net_torque = total_torque - gyroscopic_torque;
-	//Angular acceleration
-	Vector3 angular_acceleration(net_torque.getX() / Ixx, net_torque.getY() / Iyy, net_torque.getZ() / Izz);
+	
+	// Net torque = applied - gyroscopic
+	Vector3 net_torque = applied_torque - gyroscopic_torque;
 
-	std::cout << "Angular dynamics calculation:" << std::endl;
-	std::cout << "  Applied torque (nuN⋅m): (" << applied_torque.getX() * 1e6 << ", "
-		<< applied_torque.getY() * 1e6 << ", " << applied_torque.getZ() * 1e6 << ")" << std::endl;
-	std::cout << "  Gyroscopic torque (nuN⋅m): (" << gyroscopic_torque.getX() * 1e6 << ", "
-		<< gyroscopic_torque.getY() * 1e6 << ", " << gyroscopic_torque.getZ() * 1e6 << ")" << std::endl;
-	std::cout << "  Angular acceleration (deg/s^2): (" << angular_acceleration.getX() * 180.0 / M_PI << ", "
-		<< angular_acceleration.getY() * 180.0 / M_PI << ", " << angular_acceleration.getZ() * 180.0 / M_PI << ")" << std::endl;
+	// Angular acceleration: α = I^-1 · T_net
+	Vector3 angular_acceleration(net_torque.getX() / Ixx,
+		net_torque.getY() / Iyy,
+		net_torque.getZ() / Izz);
 
 	return angular_acceleration;
 }
@@ -335,57 +371,92 @@ Quaternion SpacecraftDynamics::computeAttitudeDerivative() const {
 	return q_dot;
 }
 
-void SpacecraftDynamics::integrate(const Vector3& control_torque, double dt) {
-	//Input parameters for environmental torques
-	Vector3 magnetic_field_eci(25000e-9, 5000e-9, -40000e-9); //Earth B-field (T)
-	Vector3 atmospheric_velocity_eci = velocity_eci; //Relative velocity for drag
-	Vector3 sun_direction_eci(1.0, 0.0, 0.0); //Simplified sun direction
-	//Initial state
-	Vector3 omega0 = angular_velocity;
-	Quaternion q0 = attitude.normalized(); //Only normalize at start
-	
-	//K1 coef at t
-	Vector3 total_torque_k1 = control_torque + computeGravityGradientTorque() + computeMagneticTorque(magnetic_field_eci) 
-		+ computeAtmosphericDragTorque(atmospheric_velocity_eci) + computeSolarRadiationTorque(sun_direction_eci);
-	Vector3 k1_omega = computeAngularAcceleration(total_torque_k1);
-	Quaternion k1_q = computeAttitudeDerivative();
-	
-	//K2 coef at t + dt/2
-	angular_velocity = omega0 + k1_omega * (dt / 2.0);
-	attitude = q0 + k1_q * (dt / 2.0); //No normalization in intermediate steps
-	Vector3 total_torque_k2 = control_torque + computeGravityGradientTorque() + computeMagneticTorque(magnetic_field_eci) 
-		+ computeAtmosphericDragTorque(atmospheric_velocity_eci) + computeSolarRadiationTorque(sun_direction_eci);
-	Vector3 k2_omega = computeAngularAcceleration(total_torque_k2);
-	Quaternion k2_q = computeAttitudeDerivative();
-	
-	//K3 coef at t + dt/2
-	angular_velocity = omega0 + k2_omega * (dt / 2.0);
-	attitude = q0 + k2_q * (dt / 2.0); 
-	Vector3 total_torque_k3 = control_torque + computeGravityGradientTorque() + computeMagneticTorque(magnetic_field_eci) 
-		+ computeAtmosphericDragTorque(atmospheric_velocity_eci) + computeSolarRadiationTorque(sun_direction_eci);
-	Vector3 k3_omega = computeAngularAcceleration(total_torque_k3);
-	Quaternion k3_q = computeAttitudeDerivative();
-	
-	//K4 coef at t + dt
-	angular_velocity = omega0 + k3_omega * dt;
-	attitude = q0 + k3_q * dt; 
-	Vector3 total_torque_k4 = control_torque + computeGravityGradientTorque() + computeMagneticTorque(magnetic_field_eci) 
-		+ computeAtmosphericDragTorque(atmospheric_velocity_eci) + computeSolarRadiationTorque(sun_direction_eci);
-	Vector3 k4_omega = computeAngularAcceleration(total_torque_k4);
-	Quaternion k4_q = computeAttitudeDerivative();
-	
-	//Final RK4 integration
-	Vector3 omega_final = omega0 + (k1_omega + k2_omega * 2.0 + k3_omega * 2.0 + k4_omega) * (dt / 6.0);
-	Quaternion q_final = q0 + (k1_q + k2_q * 2.0 + k3_q * 2.0 + k4_q) * (dt / 6.0);
-	
-	//Update state with final values
-	angular_velocity = omega_final;
-	attitude = q_final.normalized(); // Only normalize at the end
+// Adaugă această funcție în SpacecraftDynamics.cpp ÎNLOCUIND integrate() existentă
 
-	//Debug output
-	std::cout << "Rk4 model \n";
-	std::cout << "Total environmental torque (nuN⋅m): (" << total_torque_k1.getX() * 1e6 << ", "
-		<< total_torque_k1.getY() * 1e6 << ", " << total_torque_k1.getZ() * 1e6 << ")\n";
+void SpacecraftDynamics::integrate(const Vector3& control_torque, double dt) {
+	// HIGH-PRECISION RK4 INTEGRATION
+	Vector3 omega0 = angular_velocity;
+	Quaternion q0 = attitude.normalized();
+	double omega_mag = omega0.magnitude();
+
+	// Environmental torques (always apply for physical accuracy)
+	Vector3 env_torque = computeGravityGradientTorque() * 1.0; // Always apply gravity gradient
+	// Add other environmental torques if needed (aerodynamic, solar, magnetic residuals)
+	// env_torque = env_torque + computeAerodynamicTorque() + computeSolarRadiationTorque();
+	Vector3 total_torque = control_torque + env_torque;
+
+	// CORRECTED RK4 INTEGRATION - use local variables, don't modify state during evaluation
+	
+	auto angular_acceleration_at = [this](const Vector3& omega_temp, const Vector3& torque) -> Vector3 {
+		// Compute acceleration for given omega without modifying object state
+		Vector3 H_temp(Ixx * omega_temp.getX(), Iyy * omega_temp.getY(), Izz * omega_temp.getZ());
+		Vector3 gyro_temp = omega_temp.cross(H_temp);
+		Vector3 net_temp = torque - gyro_temp;
+		return Vector3(net_temp.getX() / Ixx, net_temp.getY() / Iyy, net_temp.getZ() / Izz);
+	};
+	
+	// k1 = f(t, y)
+	Vector3 k1_omega = angular_acceleration_at(omega0, total_torque);
+	
+	// k2 = f(t + h/2, y + k1*h/2)
+	Vector3 omega_k2 = omega0 + k1_omega * (dt / 2.0);
+	Vector3 k2_omega = angular_acceleration_at(omega_k2, total_torque);
+	
+	// k3 = f(t + h/2, y + k2*h/2)
+	Vector3 omega_k3 = omega0 + k2_omega * (dt / 2.0);
+	Vector3 k3_omega = angular_acceleration_at(omega_k3, total_torque);
+	
+	// k4 = f(t + h, y + k3*h)
+	Vector3 omega_k4 = omega0 + k3_omega * dt;
+	Vector3 k4_omega = angular_acceleration_at(omega_k4, total_torque);
+	
+	// Final RK4 update: y_{n+1} = y_n + h/6 * (k1 + 2*k2 + 2*k3 + k4)
+	angular_velocity = omega0 + (k1_omega + k2_omega * 2.0 + k3_omega * 2.0 + k4_omega) * (dt / 6.0);
+
+	// RK4 INTEGRATION FOR QUATERNION ATTITUDE - CORRECTED
+	// Define quaternion derivative function
+	auto quat_derivative = [](const Quaternion& q, const Vector3& w) -> Quaternion {
+		Quaternion omega_quat(0, w.getX(), w.getY(), w.getZ());
+		return q * omega_quat * 0.5;
+	};
+	
+	// Compute omega interpolations for quaternion integration
+	Vector3 omega_q1 = omega0;
+	Vector3 omega_q2 = omega0 + k1_omega * (dt / 2.0);
+	Vector3 omega_q3 = omega0 + k2_omega * (dt / 2.0);
+	Vector3 omega_q4 = omega0 + k3_omega * dt;
+	
+	// k1 = f(t, q0, omega0)
+	Quaternion k1_q = quat_derivative(q0, omega_q1);
+	
+	// k2 = f(t + h/2, q0 + k1*h/2, omega_q2)
+	Quaternion q_k2 = (q0 + k1_q * (dt / 2.0)).normalized();
+	Quaternion k2_q = quat_derivative(q_k2, omega_q2);
+	
+	// k3 = f(t + h/2, q0 + k2*h/2, omega_q3)
+	Quaternion q_k3 = (q0 + k2_q * (dt / 2.0)).normalized();
+	Quaternion k3_q = quat_derivative(q_k3, omega_q3);
+	
+	// k4 = f(t + h, q0 + k3*h, omega_q4)
+	Quaternion q_k4 = (q0 + k3_q * dt).normalized();
+	Quaternion k4_q = quat_derivative(q_k4, omega_q4);
+	
+	// Final RK4 quaternion update with explicit normalization
+	attitude = (q0 + (k1_q + k2_q * 2.0 + k3_q * 2.0 + k4_q) * (dt / 6.0)).normalized();
+	
+	// CRITICAL: Force normalization check for stability
+	double norm_check = attitude.getW()*attitude.getW() + attitude.getX()*attitude.getX() + 
+	                   attitude.getY()*attitude.getY() + attitude.getZ()*attitude.getZ();
+	if (fabs(norm_check - 1.0) > 1e-10) {
+		attitude = attitude.normalized(); // Force renormalization if drift detected
+		std::cout << "Quaternion renormalized: norm was " << sqrt(norm_check) << std::endl;
+	}
+
+	// Reduced debug output - only every 10 minutes
+	if (fmod(mission_time, 600.0) < dt) {
+		std::cout << "RK4 Integration: omega=" << omega_mag * 180 / M_PI
+			<< " deg/s, control=" << control_torque.magnitude() * 1e6 << " uN*m" << std::endl;
+	}
 }
 
 void SpacecraftDynamics::setControlGains(double Kp, double Kd) {
@@ -430,61 +501,65 @@ Vector3 SpacecraftDynamics::computeAttitudeError(const Quaternion& target_attitu
 
 
 Vector3 SpacecraftDynamics::computePDControl(const Quaternion& target_attitude, const Vector3& target_angular_velocity) const {
-    // Advanced PD controller with adaptive gains for fine stabilization
+    // HYBRID CONTROL: Velocity damping above 0.1°/s, position control below
     
-    // Compute attitude error using proper quaternion error
-    Quaternion q_error = target_attitude * attitude.conjugate();
+    double angular_vel_mag = angular_velocity.magnitude();
+    const double velocity_threshold = 0.0017; // 0.1°/s threshold
     
-    // Ensure shortest path
-    if (q_error.getW() < 0) {
-        q_error = q_error * (-1.0);
+    if (angular_vel_mag > velocity_threshold) {
+        // VELOCITY DAMPING MODE: Pure damping without position feedback
+        double damping_gain = 0.3e-3; // Conservative: 0.3 mN*m per rad/s
+        Vector3 velocity_damping = angular_velocity * (-damping_gain);
+        
+        // Limit damping torque
+        double max_damping_torque = 1.0e-3; // 1 mN*m max
+        if (velocity_damping.magnitude() > max_damping_torque) {
+            velocity_damping = velocity_damping.normalized() * max_damping_torque;
+        }
+        
+        if (fmod(mission_time, 60.0) < 0.1) {
+            std::cout << "VELOCITY DAMPING: w=" << angular_vel_mag * 180.0 / M_PI 
+                      << "deg/s, damping=" << velocity_damping.magnitude()*1e6 << "uN*m" << std::endl;
+        }
+        
+        return velocity_damping;
     }
     
-    // Extract attitude error vector properly
-    Vector3 attitude_error;
+    // POSITION CONTROL MODE: Classical PD for precision pointing below 0.1°/s
+    Quaternion q_error = target_attitude * attitude.conjugate();
+    if (q_error.getW() < 0) q_error = q_error * (-1.0);
+    
+    Vector3 attitude_error(0,0,0);
     double error_magnitude = sqrt(q_error.getX()*q_error.getX() + 
                                   q_error.getY()*q_error.getY() + 
                                   q_error.getZ()*q_error.getZ());
     
     if (error_magnitude > 1e-8) {
-        // For small angles: error ≈ 2*vector_part, but normalize for large angles
-        double scale = 2.0 * atan2(error_magnitude, fabs(q_error.getW())) / error_magnitude;
+        double scale = 2.0 * atan2(error_magnitude, std::abs(q_error.getW())) / error_magnitude;
         attitude_error = Vector3(q_error.getX() * scale, 
                                q_error.getY() * scale, 
                                q_error.getZ() * scale);
-    } else {
-        attitude_error = Vector3(0, 0, 0);
     }
     
-    // Rate error - what we want minus what we have
     Vector3 rate_error = target_angular_velocity - angular_velocity;
     
-    // ADAPTIVE GAINS based on current angular velocity magnitude
-    double angular_vel_mag = angular_velocity.magnitude();
-    double adaptive_kp = Kp_x;
-    double adaptive_kd = Kd_x;
-    
-    // Fine-tuning for stabilization phase
-    if (angular_vel_mag < 0.02) { // <1.15°/s - fine stabilization
-        adaptive_kp *= 2.0;  // Increase proportional response
-        adaptive_kd *= 1.5;  // Increase damping
-    } else if (angular_vel_mag < 0.05) { // <2.87°/s - moderate speeds
-        adaptive_kp *= 1.5;
-        adaptive_kd *= 1.2;
-    }
-    // For higher speeds, use base gains
-    
-    // Classic PD control with adaptive gains
-    Vector3 proportional_term = attitude_error * adaptive_kp;
-    Vector3 derivative_term = rate_error * adaptive_kd;
+    // CONSERVATIVE GAINS for stable precision pointing
+    Vector3 proportional_term = attitude_error * 0.02e-3; // Very small: 0.02 mN*m per radian
+    Vector3 derivative_term = rate_error * 0.2e-3;        // Moderate: 0.2 mN*m per rad/s
     
     Vector3 control_torque = proportional_term + derivative_term;
     
-    // Debug output for fine-tuning
-    double att_err_deg = error_magnitude * 180.0 / M_PI * 2.0;
-    std::cout << "PD Control: ω=" << angular_vel_mag * 180.0 / M_PI 
-              << "°/s, att_err=" << att_err_deg << "°, Kp=" << adaptive_kp 
-              << ", Kd=" << adaptive_kd << std::endl;
+    // Tight limit for precision mode
+    double max_precision_torque = 0.3e-3; // 0.3 mN*m max for precision
+    if (control_torque.magnitude() > max_precision_torque) {
+        control_torque = control_torque.normalized() * max_precision_torque;
+    }
+    
+    if (fmod(mission_time, 120.0) < 0.1) {
+        std::cout << "PRECISION PD: w=" << angular_vel_mag * 180.0 / M_PI 
+                  << "deg/s, att_err=" << error_magnitude*180.0/M_PI 
+                  << "deg, |tau|=" << control_torque.magnitude()*1e6 << "uN*m" << std::endl;
+    }
     
     return control_torque;
 }
@@ -494,26 +569,26 @@ Vector3 SpacecraftDynamics::computeDetumblingControl() const {
     
     double angular_vel_mag = angular_velocity.magnitude();
     
-    // Ultra-fine deadband for precision stabilization
-    if (angular_vel_mag < 0.0002) { // ~0.01 deg/s - much tighter
+    // Reasonable deadband for precision stabilization
+    if (angular_vel_mag < 0.001) { // ~0.06 deg/s - more reasonable
         return Vector3(0, 0, 0);
     }
     
-    // Adaptive damping gain based on angular velocity
+    // Adaptive damping gain based on angular velocity - increased for better performance
     double damping_gain;
     if (angular_vel_mag > 0.02) {  // ~1.15 deg/s - strong damping for fast rotation
-        damping_gain = 0.005;
+        damping_gain = 0.02;   // 4x increase
     } else if (angular_vel_mag > 0.005) { // ~0.29 deg/s - moderate damping
-        damping_gain = 0.003;
+        damping_gain = 0.015;  // 5x increase
     } else { // Very slow - fine damping
-        damping_gain = 0.001;
+        damping_gain = 0.005;  // 5x increase
     }
     
     Vector3 detumbling_torque = angular_velocity * (-damping_gain);
     
     // Debug output for tuning
-    std::cout << "Detumbling: ω=" << angular_vel_mag * 180.0 / M_PI 
-              << "°/s, gain=" << damping_gain << std::endl;
+    std::cout << "Detumbling: w=" << angular_vel_mag * 180.0 / M_PI 
+              << "deg/s, gain=" << damping_gain << std::endl;
     
     return detumbling_torque;
 }
@@ -600,24 +675,66 @@ Quaternion SpacecraftDynamics::computeStabilizationTarget() const {
 }
 
 void SpacecraftDynamics::updateWheelMomentum(const Vector3& commanded_torque, double dt) {
-	//Calc angular acc : aplha = -t/I
-	//Minus because the wheel spins opposite to apply the torque
-	Vector3 angular_acceleration = commanded_torque * (-1.0 / wheel_inertia);
-	//Update angular velocity
-	wheel_angular_velocity = wheel_angular_velocity + angular_acceleration * dt;
+	// Store previous wheel angular velocity for reaction torque calculation
+	Vector3 previous_wheel_velocity = wheel_angular_velocity;
+	
+	// Apply torque limits BEFORE wheel integration + RATE LIMITING for smooth operation
+	Vector3 limited_torque = commanded_torque;
+	
+	// REMOVED EXCESSIVE TORQUE RATE LIMITING - Allow fast wheel response for detumbling
+	// For 6U CubeSat at 11+ deg/s, need immediate strong torque response
+	// static Vector3 previous_torque_cmd(0, 0, 0);
+	// double max_torque_rate = 1e-3; -- TOO RESTRICTIVE
+	// Removed slow torque ramping to allow immediate wheel authority
+	
+	// Apply magnitude limits
+	if (limited_torque.getX() > max_wheel_torque) limited_torque = Vector3(max_wheel_torque, limited_torque.getY(), limited_torque.getZ());
+	if (limited_torque.getX() < -max_wheel_torque) limited_torque = Vector3(-max_wheel_torque, limited_torque.getY(), limited_torque.getZ());
+	if (limited_torque.getY() > max_wheel_torque) limited_torque = Vector3(limited_torque.getX(), max_wheel_torque, limited_torque.getZ());
+	if (limited_torque.getY() < -max_wheel_torque) limited_torque = Vector3(limited_torque.getX(), -max_wheel_torque, limited_torque.getZ());
+	if (limited_torque.getZ() > max_wheel_torque) limited_torque = Vector3(limited_torque.getX(), limited_torque.getY(), max_wheel_torque);
+	if (limited_torque.getZ() < -max_wheel_torque) limited_torque = Vector3(limited_torque.getX(), limited_torque.getY(), -max_wheel_torque);
+	
+	//Calc angular acc : alpha = -tau/I (wheels spin opposite to create reaction torque)
+	Vector3 angular_acceleration = limited_torque * (-1.0 / wheel_inertia);
+	
+	//Update wheel angular velocity
+	Vector3 new_wheel_velocity = wheel_angular_velocity + angular_acceleration * dt;
+	
+	// REDUCED WHEEL VELOCITY RAMPING: Allow faster wheel response for detumbling
+	static Vector3 target_velocity_history = wheel_angular_velocity;
+	double max_velocity_rate = 100.0; // rad/s per second - much faster for detumbling
+	Vector3 velocity_delta = new_wheel_velocity - target_velocity_history;
+	if (velocity_delta.magnitude() > max_velocity_rate * dt) {
+		new_wheel_velocity = target_velocity_history + velocity_delta.normalized() * (max_velocity_rate * dt);
+	}
+	target_velocity_history = new_wheel_velocity;
+	
 	//Apply saturation at max speed for each axis
-	double wx = wheel_angular_velocity.getX();
-	double wy = wheel_angular_velocity.getY();
-	double wz = wheel_angular_velocity.getZ();
-
-	if (wx > max_wheel_speed) wx = max_wheel_speed;
-	if (wx < -max_wheel_speed) wx = -max_wheel_speed;
-	if (wy > max_wheel_speed) wy = max_wheel_speed;
-	if (wy < -max_wheel_speed) wy = -max_wheel_speed;
-	if (wz > max_wheel_speed) wz = max_wheel_speed;
-	if (wz < -max_wheel_speed) wz = -max_wheel_speed;
+	double wx = std::max(-max_wheel_speed, std::min(max_wheel_speed, new_wheel_velocity.getX()));
+	double wy = std::max(-max_wheel_speed, std::min(max_wheel_speed, new_wheel_velocity.getY()));
+	double wz = std::max(-max_wheel_speed, std::min(max_wheel_speed, new_wheel_velocity.getZ()));
 
 	wheel_angular_velocity = Vector3(wx, wy, wz);
+	
+	// Calculate ACTUAL reaction torque applied to spacecraft body
+	// This is the torque that the spacecraft experiences (Newton's 3rd law)
+	// When wheels gain angular momentum, spacecraft loses it (opposite direction)
+	Vector3 delta_wheel_velocity = wheel_angular_velocity - previous_wheel_velocity;
+	Vector3 delta_wheel_momentum = delta_wheel_velocity * wheel_inertia;
+	
+	// Reaction torque on spacecraft = -change in wheel momentum / dt
+	Vector3 raw_reaction_torque = delta_wheel_momentum * (-1.0 / dt);
+	
+	// FIXED: Allow strong reaction torque for effective detumbling at 11+ deg/s
+	double max_reaction_torque = 15e-3; // 15 mN*m maximum reaction (matches max_wheel_torque)
+	if (raw_reaction_torque.magnitude() > max_reaction_torque) {
+		raw_reaction_torque = raw_reaction_torque.normalized() * max_reaction_torque;
+		std::cout << "WARNING: Wheel reaction torque limited to " << max_reaction_torque*1e3 << " mN*m" << std::endl;
+	}
+	
+	last_wheel_reaction_torque = raw_reaction_torque;
+	wheel_torque_command = last_wheel_reaction_torque;
 }
 
 bool SpacecraftDynamics::areWheelsSaturated() const {
@@ -638,84 +755,246 @@ Vector3 SpacecraftDynamics::computeReactionWheelControl(const Quaternion& target
 	else {
 		desired_torque = computePDControl(target_attitude);
 	}
-	//Saturates torque at wheel limit (0.5 mN*m each axis)
-	double tx = desired_torque.getX();
-	double ty = desired_torque.getY();
-	double tz = desired_torque.getZ();
-
-	if (tx > max_wheel_torque) tx = max_wheel_torque;
-	if (tx < -max_wheel_torque) tx = -max_wheel_torque;
-	if (ty > max_wheel_torque) ty = max_wheel_torque;
-	if (ty < -max_wheel_torque) ty = -max_wheel_torque;
-	if (tz > max_wheel_torque) tz = max_wheel_torque;
-	if (tz < -max_wheel_torque) tz = -max_wheel_torque;
-
-	return Vector3(tx, ty, tz);
+	
+	// Return desired torque - limiting will be done in updateWheelMomentum()
+	return desired_torque;
 }
 
-Vector3 SpacecraftDynamics::computeMagnetorqueControl(const Vector3& desired_torque, const Vector3& magnetic_field_eci) {
-	//Convert magnetic field to body frame
-	Vector3 B_body = attitude.conjugate().rotate(magnetic_field_eci);
-	//Calc the necessary dipole t = m x B -> m = B x t / |B|^2
-	double B_magnitude_sq = B_body.dot(B_body);
-	if (B_magnitude_sq < 1e-12) {
-		//Magnetic field too low - return 0 dipole
-		return Vector3(0, 0, 0);
-	}
-	Vector3 required_dipole = B_body.cross(desired_torque) * (1.0 / B_magnitude_sq);
-	// Saturate each component to max_magnetic_dipole
-	double mx = required_dipole.getX();
-	double my = required_dipole.getY();
-	double mz = required_dipole.getZ();
+Vector3 SpacecraftDynamics::computeMagnetorqueControl(const Vector3& desired_torque, const Vector3& magnetic_field_eci, bool use_bdot_law) {
+    // Convert magnetic field to body frame
+    Vector3 B_body = attitude.conjugate().rotate(magnetic_field_eci);
+    double Bsq = B_body.dot(B_body);
 
-	if (mx > max_magnetic_dipole) mx = max_magnetic_dipole;
-	if (mx < -max_magnetic_dipole) mx = -max_magnetic_dipole;
-	if (my > max_magnetic_dipole) my = max_magnetic_dipole;
-	if (my < -max_magnetic_dipole) my = -max_magnetic_dipole;
-	if (mz > max_magnetic_dipole) mz = max_magnetic_dipole;
-	if (mz < -max_magnetic_dipole) mz = -max_magnetic_dipole;
+    // If B magnitude too small, return zeros and clear commanded dipole
+    if (Bsq < 1e-12) {
+        commanded_magnetic_dipole = Vector3(0,0,0);
+        return Vector3(0,0,0);
+    }
 
-	return Vector3(mx, my, mz);
+    Vector3 required_dipole(0,0,0);
+
+    if (use_bdot_law) {
+        // Correct B-dot: dB/dt ≈ -ω × B => m = -k * dB/dt = k * (ω × B)
+        // Use normalized formulation to avoid scaling issues: m = k*(ω×B)/|B|^2
+        // k_bdot tuning parameter (A*m^2 / (T*rad/s))
+        const double k_bdot = 2.0e-2; // Very strong for effective detumbling from 35 deg/s to 1 deg/s
+        Vector3 omega = angular_velocity; // body rates
+        
+        // STAGNATION DETECTION: Check if ω is too aligned with B
+        double omega_mag = omega.magnitude();
+        Vector3 B_unit = B_body.normalized();
+        double alignment = std::abs(omega.normalized().dot(B_unit));
+        
+        // If >85% aligned AND angular velocity >1 deg/s, signal wheel assistance needed
+        bool stagnation_detected = (alignment > 0.85) && (omega_mag > 0.017); // 1 deg/s
+        
+        if (stagnation_detected) {
+            std::cout << "STAGNATION DETECTED: alignment=" << alignment*100 
+                      << "%, omega=" << omega_mag*180/M_PI << " deg/s - requesting wheel assist" << std::endl;
+            // Set a flag that the simulator can read to blend in wheel control
+            anti_align_start_time = mission_time; // Reuse this as "stagnation detected" flag
+        } else if (anti_align_start_time > 0 && alignment < 0.6) {
+            // Stagnation resolved - clear flag
+            anti_align_start_time = -1.0;
+            std::cout << "Stagnation resolved: alignment=" << alignment*100 << "%" << std::endl;
+        }
+        
+        // Always use B-dot control (wheel assistance handled in simulator)
+        required_dipole = omega.cross(B_body) * (k_bdot / Bsq);
+    } else {
+        // Inverse allocation to produce desired torque: m = (B × τ) / |B|^2
+        required_dipole = B_body.cross(desired_torque) * (1.0 / Bsq);
+    }
+
+    // clamp commanded dipole
+    Vector3 m_cmd = clampDipole(required_dipole);
+    commanded_magnetic_dipole = m_cmd; // record commanded dipole
+
+    // Compute resulting magnetic torque tau_mag = m × B (in body frame)
+    Vector3 magnetic_torque = m_cmd.cross(B_body);
+
+    // Return torque applied by magnetorquers (body frame)
+    return magnetic_torque;
 }
  
 Vector3 SpacecraftDynamics::computeHybridControl(const Quaternion& target_attitude, const Vector3& magnetic_field_eci) {
-	//Calculate total desired torque with PD controller 
-	Vector3 total_desired_torque = computePDControl(target_attitude);
-	//Convert magnetic field to bodu frame and calc magnitude
-	//Calculate once in computeHybridControl
-	Vector3 B_body = attitude.conjugate().rotate(magnetic_field_eci);
-	double B_magnitude_sq = B_body.dot(B_body);
-	double B_magnitude = sqrt(B_magnitude_sq);
-	//Define magnetic field thresholds
-	double B_min = 10e-6; //10 nuT
-	double B_max = 50e-6; //50 nuT
-	//Normalize magnetic field strenght
-	double B_normalized = (B_magnitude - B_min) / (B_max - B_min);
-	B_normalized = std::max(0.0, std::min(1.0, B_normalized));
-    //Check wheel saturation
+    // Desired torque from PD with limiting
+    Vector3 tau_des = computePDControl(target_attitude, Vector3(0,0,0));
+    
+    // CRITICAL: Apply global torque limiting to prevent unrealistic commands
+    tau_des = limitControlTorque(tau_des, "HybridControl");
+    // Convert B to body
+    Vector3 B_body = attitude.conjugate().rotate(magnetic_field_eci);
+    double Bsq = B_body.dot(B_body);
+
+    // Default values
+    Vector3 m_cmd(0,0,0);
+    Vector3 tau_mag(0,0,0);
+
+    // Compute magnetorquer command by inverse allocation if B present
+    if (Bsq > 1e-12) {
+        Vector3 m_candidate = B_body.cross(tau_des) * (1.0 / Bsq); // m = (B × τ_des)/|B|^2
+        m_cmd = clampDipole(m_candidate);
+        tau_mag = m_cmd.cross(B_body);
+    }
+
+    // Feed-forward torque for reaction wheels:
+    Vector3 tau_wheel_cmd = tau_des - tau_mag;
+    // Record wheel torque command to class member so other code can use it
+    wheel_torque_command = tau_wheel_cmd;
+
+    // Apply commanded dipole to magnetorquers
+    commanded_magnetic_dipole = m_cmd;
+
+    // Debug print (optional, reduce verbosity in long runs)
+    if (fmod(mission_time, 60.0) < 1e-6) {
+        std::cout << "HybridControl @ t=" << mission_time << "s: |B|=" << sqrt(Bsq)
+                  << ", m_cmd=(" << m_cmd.getX() << "," << m_cmd.getY() << "," << m_cmd.getZ() << ")"
+                  << ", tau_wheel_cmd=(" << tau_wheel_cmd.getX()*1e6 << "," << tau_wheel_cmd.getY()*1e6 << "," << tau_wheel_cmd.getZ()*1e6 << ") uN*m"
+                  << std::endl;
+    }
+
+    // Return total applied torque: magnetic torque + wheel torque (wheels expected to apply tau_wheel_command elsewhere)
+    Vector3 wheel_torque_applied = tau_wheel_cmd; // placeholder: ensure your wheel actuator model uses wheel_torque_command to update wheel states
+    return tau_mag + wheel_torque_applied;
+}
+
+void SpacecraftDynamics::desaturateWheels(const Vector3& magnetic_field_eci, double dt) {
+	// Check if wheels are getting close to saturation
+	double saturation_threshold = 0.8; // 80% of max speed
 	double max_wheel_sat = std::max({
 		std::abs(wheel_angular_velocity.getX()) / max_wheel_speed,
 		std::abs(wheel_angular_velocity.getY()) / max_wheel_speed,
 		std::abs(wheel_angular_velocity.getZ()) / max_wheel_speed
 		});
-	//Calculate actuator frictions
-	double magnetorquer_fraction = B_normalized;
-	//If wheels are highly saturated (>80%), force more use of magnetorque
-	if (max_wheel_sat > 0.8) {
-		magnetorquer_fraction = std::max(magnetorquer_fraction, 0.8);
+
+	if (max_wheel_sat < saturation_threshold) {
+		return; // No desaturation needed
 	}
-	double wheel_fraction = 1.0 - magnetorquer_fraction;
-	//Split torque between actuators
-	Vector3 torque_to_magnetorquers = total_desired_torque * magnetorquer_fraction;
-	Vector3 torque_to_wheels = total_desired_torque * wheel_fraction;
-	//Apply magnetorquer control
-	Vector3 actual_mag_dipole = computeMagnetorqueControl(torque_to_magnetorquers, magnetic_field_eci);
-	Vector3 actual_wheel_torque = computeReactionWheelControl(target_attitude, torque_to_wheels);
-	//Debug
-	std::cout << "Hybrid Control: B=" << B_magnitude * 1e6 << "nuT, "
-		<< "Mag fraction=" << magnetorquer_fraction << ", "
-		<< "Wheel sat=" << max_wheel_sat * 100 << "%" << std::endl;
-	//Return total applied torque
-	Vector3 actual_mag_torque = actual_mag_dipole.cross(B_body);
-	return actual_mag_torque + actual_wheel_torque;
+
+	// Use magnetorquers to create opposite torque and slow down wheels
+	Vector3 B_body = attitude.conjugate().rotate(magnetic_field_eci);
+	double B_mag_sq = B_body.dot(B_body);
+
+	if (B_mag_sq < 1e-12) {
+		return; // No magnetic field for desaturation
+	}
+
+	// Calculate desired torque to counter wheel momentum
+	Vector3 wheel_momentum = wheel_angular_velocity * wheel_inertia;
+	Vector3 desired_desat_torque = wheel_momentum * (-0.1 / dt); // 10% reduction per time step
+
+	// Generate magnetic dipole for desaturation
+	Vector3 required_dipole = B_body.cross(desired_desat_torque) * (1.0 / B_mag_sq);
+
+	// Apply magnetorquer limits
+	double mx = std::max(-max_magnetic_dipole, std::min(max_magnetic_dipole, required_dipole.getX()));
+	double my = std::max(-max_magnetic_dipole, std::min(max_magnetic_dipole, required_dipole.getY()));
+	double mz = std::max(-max_magnetic_dipole, std::min(max_magnetic_dipole, required_dipole.getZ()));
+
+	Vector3 actual_dipole(mx, my, mz);
+	Vector3 desat_torque = actual_dipole.cross(B_body);
+
+	// Apply desaturation torque to wheels (opposite direction)
+	Vector3 wheel_decel = desat_torque * (-1.0 / wheel_inertia);
+	wheel_angular_velocity = wheel_angular_velocity + wheel_decel * dt;
+
+	// Apply wheel speed limits after desaturation
+	double wx = std::max(-max_wheel_speed, std::min(max_wheel_speed, wheel_angular_velocity.getX()));
+	double wy = std::max(-max_wheel_speed, std::min(max_wheel_speed, wheel_angular_velocity.getY()));
+	double wz = std::max(-max_wheel_speed, std::min(max_wheel_speed, wheel_angular_velocity.getZ()));
+
+	wheel_angular_velocity = Vector3(wx, wy, wz);
+
+	std::cout << "Wheel desaturation: " << max_wheel_sat * 100 << "% -> "
+		<< "New max: " << std::max({ std::abs(wx), std::abs(wy), std::abs(wz) }) / max_wheel_speed * 100 << "%" << std::endl;
+}
+
+// ANTI-ALIGNMENT HELPER FUNCTIONS
+
+// Clamp dipole to ±max_magnetic_dipole (component-wise)
+Vector3 SpacecraftDynamics::clampDipole(const Vector3& dip) {
+    double mx = std::max(-max_magnetic_dipole, std::min(max_magnetic_dipole, dip.getX()));
+    double my = std::max(-max_magnetic_dipole, std::min(max_magnetic_dipole, dip.getY()));
+    double mz = std::max(-max_magnetic_dipole, std::min(max_magnetic_dipole, dip.getZ()));
+    return Vector3(mx, my, mz);
+}
+
+// Simple command wrapper (records commanded dipole to class member)
+void SpacecraftDynamics::commandMagnetorquer(const Vector3& dip) {
+    commanded_magnetic_dipole = dip;
+    // If you have a hw interface, place call here to set/PWM driver.
+}
+
+// Global torque limiting function to prevent unrealistic control commands
+Vector3 SpacecraftDynamics::limitControlTorque(const Vector3& torque, const std::string& source) {
+    const double max_control_torque = 5e-3; // 5 mN*m maximum for realistic 6U CubeSat
+    double torque_magnitude = torque.magnitude();
+    
+    if (torque_magnitude > max_control_torque) {
+        Vector3 limited_torque = torque.normalized() * max_control_torque;
+        
+        // Debug for excessive torque attempts - simplified without time check
+        std::cout << source << " torque limited from " << torque_magnitude*1e6 
+                  << " to " << max_control_torque*1e6 << " uN*m" << std::endl;
+        
+        return limited_torque;
+    }
+    
+    return torque;
+}
+
+// Anti-alignment: rotate commanded dipole perpendicular to B to break alignment plateau.
+// B_body is magnetic field in body frame (T), mission_time current sim time (s), dt timestep.
+void SpacecraftDynamics::runAntiAlignment(const Vector3& B_body, double mission_time, double dt) {
+    double Bnorm = B_body.magnitude();
+    if (Bnorm < 1e-12) {
+        // No B available -> nothing to do
+        anti_align_start_time = -1.0; // Reset timer
+        return;
+    }
+    Vector3 B_unit = B_body.normalized();
+
+    double t_elapsed = mission_time - anti_align_start_time;
+    
+    // Check if we should stop anti-alignment (stagnation resolved)
+    Vector3 omega = angular_velocity;
+    double omega_mag = omega.magnitude();
+    double alignment = std::abs(omega.normalized().dot(B_unit));
+    
+    // Stop if alignment is broken (<60%) OR angular velocity is low enough
+    if ((alignment < 0.6 && omega_mag > 0.01) || omega_mag < 0.017 || t_elapsed > anti_align_duration) {
+        anti_align_start_time = -1.0;
+        if (t_elapsed > anti_align_duration) {
+            std::cout << "Anti-alignment timeout after " << anti_align_duration << "s" << std::endl;
+        } else {
+            std::cout << "Anti-alignment SUCCESS: alignment=" << alignment*100 
+                      << "%, omega=" << omega_mag*180/M_PI << " deg/s" << std::endl;
+        }
+        return;
+    }
+
+    // AGGRESSIVE anti-alignment: use maximum dipole in plane perpendicular to B
+    double phase = 2.0 * M_PI * anti_align_freq * t_elapsed; // Default 0.5 Hz
+    Vector3 perp1, perp2;
+    
+    // Find two orthogonal vectors perpendicular to B_unit
+    Vector3 arb(1.0, 0.0, 0.0);
+    if (std::abs(B_unit.dot(arb)) > 0.9) arb = Vector3(0.0, 1.0, 0.0);
+    
+    perp1 = B_unit.cross(arb).normalized();
+    perp2 = B_unit.cross(perp1).normalized();
+    
+    // Generate rotating dipole with MAXIMUM amplitude for effective torque
+    double m_max = max_magnetic_dipole; // Use full capability!
+    Vector3 m_cmd = perp1 * (m_max * std::cos(phase)) + perp2 * (m_max * std::sin(phase));
+    
+    // Apply and log
+    commandMagnetorquer(m_cmd);
+    
+    // Debug output every 5 seconds
+    if (fmod(t_elapsed, 5.0) < 0.1) {
+        std::cout << "Anti-align active: t=" << int(t_elapsed) << "s, alignment=" 
+                  << alignment*100 << "%, |m|=" << m_cmd.magnitude() << " A*m^2" << std::endl;
+    }
 }
