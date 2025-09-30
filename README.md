@@ -60,10 +60,12 @@ This simulator provides a complete AOCS testing environment featuring realistic 
 ![Untitleddesign3-ezgif com-crop](https://github.com/user-attachments/assets/671e4f78-7ef3-4ccf-b70f-deebae3a5a71)
 
 **Usage**
+
 The simulator provides real-time operation with adjustable time scaling from 0.5× to 1000× simulation speed. Mission modes can be switched during operation to test different control strategies and failure scenarios.
 !!! Changing modes should be done under maximum 100x simulation speed to be sure of no problems (for changing to 'ground contact' mode aim for 25x) !!!
 
 **Key Controls**
+
 - The mission mode changer that does not reset the simulation is done via the dropdown 'operational mode' winodw
 - The quick start presets reset the simulation when pressed because they each have their own parameters
 - Real-time simulation control (start/stop/reset)
@@ -85,6 +87,7 @@ The simulator runs at 60 FPS with real-time physics integration. Data logging ca
 All critical parameters are monitored. The simulator creates a .csv file after the app is closed, containing lots of parameters and details about the whole simulation time
 
 **Applications**
+
 This simulator is suitable for:
 - AOCS algorithm development and testing
 - Mission planning and operational scenario analysis
@@ -92,12 +95,15 @@ This simulator is suitable for:
 - Performance evaluation of different control strategies
 
 **Technical Notes**
+
 The simulation uses realistic spacecraft parameters based on typical 6U CubeSat configurations. Control gains and actuator limits are derived from flight-proven systems. Environmental models include first-order effects sufficient for mission analysis and control system design.
 
 **Issues**
+
 -Small issue, in the 'sun aquisition' mode the information about the solar panels in the aocs control window does not work, the working information is put into the 'mission info' windows
 
 **References/Bibliography**
+
  - Keeping a Good Attitude: A Quaternion-Based Orientation Filter for IMUs and MARGs (link) : https://www.mdpi.com/1424-8220/15/8/19302
  - Introduction into orbital mechanics : https://colorado.pressbooks.pub/introorbitalmechanics/front-matter/introduction
  - Markley, F. L., and Crassidis, J. L. Fundamentals of Spacecraft Attitude Determination and Control. Springer, 2014.
