@@ -18,14 +18,14 @@ build/**               linguist-generated
 out/**                 linguist-generated
 bin/**                 linguist-generated
 
-# 4) Common non-C++ files excluded from stats
-*.cmake linguist-detectable=false
-CMakeLists.txt linguist-detectable=false
-*.md     linguist-documentation
-docs/**  linguist-documentation
-*.bat    linguist-detectable=false
-*.ps1    linguist-detectable=false
-*.json   linguist-detectable=false
-*.yml    linguist-detectable=false
-*.yaml   linguist-detectable=false
-*.txt    linguist-detectable=false
+# 4) Non-C++ files excluded from stats, except CMake (allowed)
+*.cmake          linguist-detectable=true  linguist-language=CMake
+CMakeLists.txt   linguist-detectable=true  linguist-language=CMake
+*.md             linguist-documentation
+docs/**          linguist-documentation
+*.bat            linguist-detectable=false
+*.ps1            linguist-detectable=false
+*.json           linguist-detectable=false
+*.yml            linguist-detectable=false
+*.yaml           linguist-detectable=false
+*.txt            linguist-detectable=false
