@@ -62,7 +62,8 @@ This simulator provides a complete AOCS testing environment featuring realistic 
 **Usage**
 
 The simulator provides real-time operation with adjustable time scaling from 0.5× to 1000× simulation speed. Mission modes can be switched during operation to test different control strategies and failure scenarios.
-!!! Changing modes should be done under maximum 100x simulation speed to be sure of no problems (for changing to 'ground contact' mode aim for 25x) !!!
+
+**!!! Changing modes should be done under maximum 100x simulation speed to be sure of no problems (for changing to 'ground contact' mode aim for 25x) !!!**
 
 **Key Controls**
 
@@ -77,13 +78,14 @@ The simulator has a custom preset builder to create and save your own mission co
 - You can set the target attitude at which you want the satellite to follow
 - Actuator limits, Control gains : the default or usually used parameters are put in the parenthesis!
 - Mode transitions : Automatically switches to other mission modes based on conditions : Time (min), Angular velocity(deg/s) or Pointing error (deg), you can put lesser than or greater than for all of the parameters
-**!!! Important Note !!!**
 
+**!!! Important Note !!!**
   To load the preset you created, you need to enter the created presets name in to the 'name' text box then just go down and press 'load preset', the preset is saved in a .txt file created in the directory
 
 <img width="1453" height="994" alt="Screenshot 2025-09-30 235656" src="https://github.com/user-attachments/assets/dee5c447-f437-4981-a926-a2a9ba7d173d" />
 
 **Performance**
+
 The simulator runs at 60 FPS with real-time physics integration. Data logging capabilities allow for post-mission analysis and performance evaluation. 
 All critical parameters are monitored. The simulator creates a .csv file after the app is closed, containing lots of parameters and details about the whole simulation time
 
