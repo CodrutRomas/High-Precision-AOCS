@@ -78,6 +78,7 @@ The simulator has a custom preset builder to create and save your own mission co
 - Actuator limits, Control gains : the default or usually used parameters are put in the parenthesis!
 - Mode transitions : Automatically switches to other mission modes based on conditions : Time (min), Angular velocity(deg/s) or Pointing error (deg), you can put lesser than or greater than for all of the parameters
 **!!! Important Note !!!**
+
   To load the preset you created, you need to enter the created presets name in to the 'name' text box then just go down and press 'load preset', the preset is saved in a .txt file created in the directory
 
 <img width="1453" height="994" alt="Screenshot 2025-09-30 235656" src="https://github.com/user-attachments/assets/dee5c447-f437-4981-a926-a2a9ba7d173d" />
